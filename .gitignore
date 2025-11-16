@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Data and models
+data/
+models/*.pt
+cache/
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.json
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep directories
+!data/.gitkeep
+!models/.gitkeep
+!cache/.gitkeep
+!logs/.gitkeep

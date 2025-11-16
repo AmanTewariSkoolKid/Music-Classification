@@ -1,0 +1,647 @@
+{
+  "project_metadata": {
+    "name": "Music Genre Classification with Deep Learning (Local)",
+    "version": "1.1.0",
+  "description": "A 100% local system to train, evaluate, and serve a deep learning model that classifies music genres from audio clips. The application runs entirely on a single machine with local storage for datasets, cached features, logs, and model artifacts. Includes a simple Tkinter desktop UI for single-file prediction (no overengineering). Uses the FMA-medium dataset locally for training and evaluation."
+  },
+  "user_roles": [
+    {
+      "role": "LocalUser",
+      "permissions": [
+        "health_check",
+        "predict_single",
+        "predict_batch",
+        "start_training",
+        "inspect_training_runs",
+        "list_models",
+        "view_model_details",
+        "promote_model",
+        "rollback_model",
+        "manage_preprocessing_config",
+        "download_artifacts",
+        "view_audit_logs"
+      ]
+    }
+  ],
+  "functional_requirements": [
+    {
+      "id": "FR-01",
+      "user_role": "LocalUser",
+      "feature": "Single audio prediction",
+      "description": "Submit a single local audio file and receive the top-k predicted genres with probabilities via a local REST API.",
+      "acceptance_criteria": [
+        "Given a valid audio file ≤ 30MB, when submitted, then the API returns HTTP 200 with top_k predictions and softmax probabilities.",
+        "If file type is unsupported, the API returns HTTP 415.",
+        "If the model is not active, the API returns HTTP 503 with a clear error message."
+      ]
+    },
+    {
+      "id": "FR-02",
+      "user_role": "LocalUser",
+      "feature": "Batch prediction",
+      "description": "Submit a ZIP archive of audio files and receive a job ID with asynchronous processing and a summary report.",
+      "acceptance_criteria": [
+        "Given a ZIP ≤ 500MB containing ≤ 200 audio files, the API returns HTTP 202 with job_id.",
+        "If ZIP exceeds file count or size limits, return HTTP 413 with validation error details.",
+        "If archive is malformed or contains unsupported file types, return HTTP 415.",
+        "Polling the job_id endpoint returns status in {queued, running, completed, failed} with progress percent (0-100).",
+        "On completion, a JSONL report with per-file predictions is written to a local path and returned in the response; if failed, error_message is populated and HTTP 200 returns status=failed."
+      ]
+    },
+    {
+      "id": "FR-03",
+      "user_role": "LocalUser",
+      "feature": "Model training run",
+      "description": "Launch a local training job on the FMA-medium dataset with specified hyperparameters and preprocessing config.",
+      "acceptance_criteria": [
+        "Given a valid training config and local dataset path, the API returns HTTP 202 with run_id.",
+        "Training logs and metrics are persisted locally and queryable by run_id.",
+        "Artifacts (model checkpoint, scaler, label map, config) are saved to a local models/ directory with immutable IDs."
+      ]
+    },
+    {
+      "id": "FR-04",
+      "user_role": "LocalUser",
+      "feature": "Model promotion",
+      "description": "Promote a specific trained model version to active for local inference.",
+      "acceptance_criteria": [
+        "Given a model_version_id, promotion sets it as active for inference and returns HTTP 200.",
+        "Previous active model is retained for rollback.",
+        "Promotion is blocked if required evaluation metrics or artifacts are missing.",
+        "Operation writes an entry to a local audit log."
+      ]
+    },
+    {
+      "id": "FR-05",
+      "user_role": "LocalUser",
+      "feature": "Model rollback",
+      "description": "Rollback the active model to a previous version on the local machine.",
+      "acceptance_criteria": [
+        "Given a target model_version_id, the system sets it active and returns HTTP 200.",
+        "All subsequent predictions use the rolled-back model.",
+        "Operation is appended to the local audit log with timestamp and reason."
+      ]
+    },
+    {
+      "id": "FR-06",
+      "user_role": "LocalUser",
+      "feature": "Prediction retrieval",
+      "description": "Retrieve details of a past prediction by its ID from local storage.",
+      "acceptance_criteria": [
+        "Given a prediction_id, the API returns HTTP 200 with input metadata, model_version, and outputs.",
+        "If prediction_id does not exist, the API returns HTTP 404.",
+        "A lightweight audit trail records the retrieval event (prediction_id and timestamp)."
+      ]
+    },
+    {
+      "id": "FR-07",
+      "user_role": "LocalUser",
+      "feature": "Preprocessing configuration",
+      "description": "Manage audio preprocessing parameters used for training and inference.",
+      "acceptance_criteria": [
+        "Creating or updating a config validates parameter ranges and returns HTTP 200.",
+        "Changes are versioned and associated with model versions at train/infer time.",
+        "Inference uses the config associated with the current active model."
+      ]
+    },
+    {
+      "id": "FR-08",
+      "user_role": "LocalUser",
+      "feature": "Training run inspection",
+      "description": "List and inspect local training runs, metrics, and artifacts.",
+      "acceptance_criteria": [
+        "Listing returns runs with status, start/end time, dataset info, and key metrics.",
+        "Detail view returns confusion matrix, per-genre metrics, and artifact locations.",
+        "Filtering by status and date range is supported via query parameters."
+      ]
+    },
+    {
+      "id": "FR-09",
+      "user_role": "LocalUser",
+      "feature": "Health check",
+      "description": "Expose liveness and readiness probes for the local service.",
+      "acceptance_criteria": [
+        "GET /api/health returns HTTP 200 with {status: 'ok'} when service is ready.",
+        "Readiness fails if active model or preprocessing config is missing."
+      ]
+    },
+    {
+      "id": "FR-10",
+      "user_role": "LocalUser",
+      "feature": "Top-k configuration",
+      "description": "Allow clients to specify the number of top genres to return.",
+      "acceptance_criteria": [
+        "If top_k is provided within the allowed range (1 to 16), the API returns exactly top_k predictions in descending probability order.",
+        "If absent, default top_k=5 is used.",
+        "Out-of-range values (top_k < 1 or top_k > 16) return HTTP 400 with validation error message and code=invalid_top_k."
+      ]
+    }
+  ],
+  "non_functional_requirements": [
+    {
+      "category": "Performance",
+      "requirement": "Single-file inference latency for 30-second audio on local CPU",
+      "metric": "<1500ms P95"
+    },
+    {
+      "category": "Performance",
+      "requirement": "Single-file inference latency on local GPU (if available, mixed precision)",
+      "metric": "<400ms P95"
+    },
+    {
+      "category": "Resource",
+      "requirement": "GPU memory usage with AMP for inference",
+      "metric": "<1.5GB VRAM P95"
+    },
+    {
+      "category": "Scalability",
+      "requirement": "Concurrent local requests",
+      "metric": "Handle 10 concurrent predictions with <2s P95 latency"
+    },
+    {
+      "category": "Storage",
+      "requirement": "Local disk footprint",
+      "metric": "<60GB total including dataset, caches, logs, and checkpoints"
+    },
+    {
+      "category": "Observability",
+      "requirement": "Local structured logs and rotation with redaction",
+      "metric": "Rotate at 100MB per file, keep 5 files; redact file paths in public views"
+    },
+    {
+      "category": "Maintainability",
+      "requirement": "Automated local tests coverage",
+      "metric": ">=80% backend lines; basic E2E on localhost"
+    },
+    {
+      "category": "Portability",
+      "requirement": "OS support",
+      "metric": "Runs on Windows 11 or Linux with Python 3.11 and CUDA-capable GPU optional"
+    }
+  ],
+  "tech_stack": {
+    "ui": { "framework": "Tkinter (desktop)", "language": "Python", "styling": "Native widgets" },
+    "backend": { "framework": "FastAPI", "language": "Python", "runtime": "Python 3.11" },
+    "database": { "system": "pandas DataFrames", "storage": "CSV/JSON files on disk" },
+    "infrastructure": { "hosting": "Local machine (uvicorn on localhost)", "ci_cd": "None (local-only project)" }
+  },
+  "data_models": [
+  { "note": "For a simple college project, persist these entities as pandas DataFrames saved to CSV/JSON under a 'data/' folder instead of a full SQL database." },
+    {
+      "entity": "ModelVersion",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "version_tag", "type": "String", "constraints": "NN UNIQUE" },
+        { "name": "status", "type": "String", "constraints": "NN ENUM(trained,validated,active,archived)" },
+        { "name": "artifact_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "label_map_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "preprocessing_config_id", "type": "UUID", "constraints": "NN FK->PreprocessingConfig.id" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" }
+      ]
+    },
+    {
+      "entity": "PreprocessingConfig",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "sample_rate", "type": "Integer", "constraints": "NN" },
+        { "name": "n_fft", "type": "Integer", "constraints": "NN" },
+        { "name": "hop_length", "type": "Integer", "constraints": "NN" },
+        { "name": "n_mels", "type": "Integer", "constraints": "NN" },
+        { "name": "top_db", "type": "Integer", "constraints": "NN" },
+        { "name": "spec_augment", "type": "Boolean", "constraints": "NN" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" }
+      ]
+    },
+    {
+      "entity": "TrainingRun",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "model_version_id", "type": "UUID", "constraints": "NN FK->ModelVersion.id" },
+        { "name": "dataset_path", "type": "String", "constraints": "NN (local directory path)" },
+        { "name": "config_json", "type": "String", "constraints": "NN" },
+        { "name": "status", "type": "String", "constraints": "NN ENUM(queued,running,completed,failed)" },
+        { "name": "log_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "started_at", "type": "DateTime", "constraints": "NN" },
+        { "name": "ended_at", "type": "DateTime", "constraints": "NULLABLE" }
+      ]
+    },
+    {
+      "entity": "EvaluationMetric",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "training_run_id", "type": "UUID", "constraints": "NN FK->TrainingRun.id" },
+        { "name": "metric_name", "type": "String", "constraints": "NN" },
+        { "name": "metric_value", "type": "Float", "constraints": "NN" },
+        { "name": "split", "type": "String", "constraints": "NN ENUM(train,val,test)" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" }
+      ]
+    },
+    {
+      "entity": "AudioSample",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "filename", "type": "String", "constraints": "NN" },
+        { "name": "content_type", "type": "String", "constraints": "NN" },
+        { "name": "file_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "duration_seconds", "type": "Float", "constraints": "NULLABLE" },
+        { "name": "batch_job_id", "type": "UUID", "constraints": "NULLABLE FK->BatchJob.id" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" }
+      ]
+    },
+    {
+      "entity": "Prediction",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "audio_sample_id", "type": "UUID", "constraints": "NN FK->AudioSample.id" },
+        { "name": "model_version_id", "type": "UUID", "constraints": "NN FK->ModelVersion.id" },
+        { "name": "top_k", "type": "Integer", "constraints": "NN" },
+        { "name": "result_json", "type": "String", "constraints": "NULLABLE" },
+        { "name": "status", "type": "String", "constraints": "NN ENUM(pending,completed,failed)" },
+        { "name": "error_message", "type": "String", "constraints": "NULLABLE" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" }
+      ]
+    },
+    {
+      "entity": "BatchJob",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "status", "type": "String", "constraints": "NN ENUM(queued,running,completed,failed)" },
+        { "name": "input_archive_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "output_report_path", "type": "String", "constraints": "NULLABLE (local file path)" },
+        { "name": "error_message", "type": "String", "constraints": "NULLABLE" },
+        { "name": "worker_log_path", "type": "String", "constraints": "NN (local file path)" },
+        { "name": "created_at", "type": "DateTime", "constraints": "NN" },
+        { "name": "ended_at", "type": "DateTime", "constraints": "NULLABLE" }
+      ]
+    },
+    {
+      "entity": "AuditLog",
+      "attributes": [
+        { "name": "id", "type": "UUID", "constraints": "PK" },
+        { "name": "timestamp", "type": "DateTime", "constraints": "NN" },
+        { "name": "action", "type": "String", "constraints": "NN" },
+        { "name": "entity_type", "type": "String", "constraints": "NN" },
+        { "name": "entity_id", "type": "String", "constraints": "NN" },
+        { "name": "details_json", "type": "String", "constraints": "NULLABLE" }
+      ]
+    }
+  ],
+  "api_endpoints": [
+    {
+      "endpoint": "GET /api/health",
+      "purpose": "Liveness and readiness probe for the local service",
+      "request_parameters": null,
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"status\": {\"type\": \"string\"}, \"ready\": {\"type\": \"boolean\"} }, \"required\": [\"status\",\"ready\"] }"
+    },
+    {
+      "endpoint": "POST /api/predict",
+      "purpose": "Predict genres for a single local audio file",
+      "request_parameters": "query: top_k (integer, optional, default=5, min=1, max=16)",
+      "request_body_schema": "multipart/form-data with field 'file' as audio/*",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"prediction_id\": {\"type\":\"string\"}, \"model_version\": {\"type\":\"string\"}, \"top_k\": {\"type\":\"integer\"}, \"predictions\": {\"type\":\"array\", \"items\": {\"type\":\"object\", \"properties\": {\"genre\": {\"type\":\"string\"}, \"probability\": {\"type\":\"number\"}}}} }, \"required\": [\"prediction_id\",\"model_version\",\"top_k\",\"predictions\"] }"
+    },
+    {
+      "endpoint": "POST /api/predict/batch",
+      "purpose": "Batch prediction for multiple local audio files via ZIP",
+      "request_parameters": null,
+      "request_body_schema": "multipart/form-data with field 'archive' as application/zip (≤500MB, ≤200 files)",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"job_id\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"} }, \"required\": [\"job_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/predict/batch/{job_id}",
+      "purpose": "Check batch job status and progress",
+      "request_parameters": "path: job_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"job_id\": {\"type\": \"string\"}, \"status\": {\"type\": \"string\"}, \"progress\": {\"type\": \"integer\"}, \"error_message\": {\"type\": \"string\"} }, \"required\": [\"job_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/predict/batch/{job_id}/report",
+      "purpose": "Download batch prediction JSONL report",
+      "request_parameters": "path: job_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "stream: application/jsonl"
+    },
+    {
+      "endpoint": "GET /api/predict/{prediction_id}",
+      "purpose": "Retrieve a single prediction result from local storage",
+      "request_parameters": "path: prediction_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"prediction_id\": {\"type\":\"string\"}, \"audio\": {\"type\":\"object\"}, \"model_version\": {\"type\":\"string\"}, \"predictions\": {\"type\":\"array\"}, \"status\": {\"type\":\"string\"}, \"error_message\": {\"type\":\"string\"} }, \"required\": [\"prediction_id\",\"audio\",\"model_version\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/predictions",
+      "purpose": "List predictions",
+      "request_parameters": "query: page (int), size (int)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"items\": {\"type\": \"array\"}, \"page\": {\"type\": \"integer\"}, \"size\": {\"type\": \"integer\"}, \"total\": {\"type\": \"integer\"} }, \"required\": [\"items\",\"page\",\"size\",\"total\"] }"
+    },
+    {
+      "endpoint": "DELETE /api/predict/{prediction_id}",
+      "purpose": "Delete a prediction and associated audio",
+      "request_parameters": "path: prediction_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"status\": {\"type\": \"string\"} }, \"required\": [\"status\"] }"
+    },
+    {
+      "endpoint": "DELETE /api/audio/{audio_sample_id}",
+      "purpose": "Delete an uploaded audio sample",
+      "request_parameters": "path: audio_sample_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"status\": {\"type\": \"string\"} }, \"required\": [\"status\"] }"
+    },
+    {
+      "endpoint": "POST /api/training/runs",
+      "purpose": "Start a local training run on the FMA-medium dataset",
+      "request_parameters": null,
+      "request_body_schema": "{ \"type\": \"object\", \"properties\": { \"version_tag\": {\"type\":\"string\"}, \"hyperparams\": {\"type\":\"object\"}, \"preprocessing_config_id\": {\"type\":\"string\"}, \"dataset_path\": {\"type\":\"string\"} }, \"required\": [\"version_tag\",\"hyperparams\",\"preprocessing_config_id\",\"dataset_path\"] }",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"run_id\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"} }, \"required\": [\"run_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/training/runs/{run_id}",
+      "purpose": "Inspect a local training run status and metrics",
+      "request_parameters": "path: run_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"run_id\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"}, \"metrics\": {\"type\":\"object\"}, \"artifacts\": {\"type\":\"object\"}, \"logs\": {\"type\":\"string\"} }, \"required\": [\"run_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/models",
+      "purpose": "List local model versions and their statuses",
+      "request_parameters": "query: status (string, optional), page (int), size (int)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"items\": {\"type\":\"array\"}, \"page\": {\"type\":\"integer\"}, \"size\": {\"type\":\"integer\"}, \"total\": {\"type\":\"integer\"} }, \"required\": [\"items\",\"page\",\"size\",\"total\"] }"
+    },
+    {
+      "endpoint": "GET /api/models/{model_version_id}",
+      "purpose": "View local model version details and metrics",
+      "request_parameters": "path: model_version_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"model_version_id\": {\"type\":\"string\"}, \"version_tag\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"}, \"metrics\": {\"type\":\"object\"}, \"artifacts\": {\"type\":\"object\"} }, \"required\": [\"model_version_id\",\"version_tag\",\"status\"] }"
+    },
+    {
+      "endpoint": "POST /api/models/{model_version_id}/promote",
+      "purpose": "Promote a local model version to active with file lock",
+      "request_parameters": "path: model_version_id (UUID)",
+      "request_body_schema": "{ \"type\": \"object\", \"properties\": { \"reason\": {\"type\":\"string\"} }, \"required\": [] }",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"model_version_id\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"} }, \"required\": [\"model_version_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "POST /api/models/{model_version_id}/rollback",
+      "purpose": "Rollback the active local model to a previous version",
+      "request_parameters": "path: model_version_id (UUID)",
+      "request_body_schema": "{ \"type\": \"object\", \"properties\": { \"reason\": {\"type\":\"string\"} }, \"required\": [] }",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"model_version_id\": {\"type\":\"string\"}, \"status\": {\"type\":\"string\"} }, \"required\": [\"model_version_id\",\"status\"] }"
+    },
+    {
+      "endpoint": "GET /api/preprocessing/configs",
+      "purpose": "List preprocessing configs",
+      "request_parameters": null,
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"items\": {\"type\":\"array\"} }, \"required\": [\"items\"] }"
+    },
+    {
+      "endpoint": "POST /api/preprocessing/configs",
+      "purpose": "Create a preprocessing config",
+      "request_parameters": null,
+      "request_body_schema": "{ \"type\": \"object\", \"properties\": { \"sample_rate\": {\"type\":\"integer\"}, \"n_fft\": {\"type\":\"integer\"}, \"hop_length\": {\"type\":\"integer\"}, \"n_mels\": {\"type\":\"integer\"}, \"top_db\": {\"type\":\"integer\"}, \"spec_augment\": {\"type\":\"boolean\"} }, \"required\": [\"sample_rate\",\"n_fft\",\"hop_length\",\"n_mels\",\"top_db\",\"spec_augment\"] }",
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"id\": {\"type\":\"string\"} }, \"required\": [\"id\"] }"
+    },
+    {
+      "endpoint": "GET /api/preprocessing/configs/{id}",
+      "purpose": "Get a preprocessing config by ID",
+      "request_parameters": "path: id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"id\": {\"type\":\"string\"}, \"config\": {\"type\":\"object\"} }, \"required\": [\"id\",\"config\"] }"
+    },
+    {
+      "endpoint": "GET /api/artifacts/{model_version_id}/download",
+      "purpose": "Download local model artifacts as a file stream",
+      "request_parameters": "path: model_version_id (UUID)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"string\", \"description\": \"binary file stream\" }"
+    },
+    {
+      "endpoint": "GET /api/audit",
+      "purpose": "List local audit log entries",
+      "request_parameters": "query: action (string, optional), entity_type (string, optional), page (int), size (int)",
+      "request_body_schema": null,
+      "response_schema": "{ \"type\": \"object\", \"properties\": { \"items\": {\"type\":\"array\"}, \"page\": {\"type\":\"integer\"}, \"size\": {\"type\":\"integer\"}, \"total\": {\"type\":\"integer\"} }, \"required\": [\"items\",\"page\",\"size\",\"total\"] }"
+    }
+  ],
+  "file_structure": {
+    "root": [
+      "src/", "tests/", "data/", "models/", "runs/", "cache/", "scripts/", "migrations/", "Dockerfile", "pyproject.toml", "README.md", ".env.example"
+    ],
+    "src": {
+      "ui": [
+          "src/ui/tk_app.py"
+        ],
+      "backend": [
+        "src/backend/app/main.py", "src/backend/app/api/health.py", "src/backend/app/api/predict.py",
+        "src/backend/app/api/training.py", "src/backend/app/api/models.py", "src/backend/app/api/configs.py",
+  "src/backend/app/api/audit.py", "src/backend/app/core/config.py", "src/backend/app/core/locking.py",
+        "src/backend/app/ml/preprocess.py", "src/backend/app/ml/spec_augment.py", "src/backend/app/ml/model.py",
+        "src/backend/app/ml/train.py", "src/backend/app/ml/inference.py", "src/backend/app/ml/evaluate.py",
+  "src/backend/app/services/storage.py", "src/backend/app/services/jobs.py", "src/backend/app/utils/logging.py"
+      ]
+    },
+    "data": {
+      "datasets": ["data/fma_medium/"],
+      "metadata": ["data/fma_metadata/"]
+    }
+  },
+  "core_functions": [
+    {
+      "module": "ml/preprocess.py",
+      "function_name": "compute_log_mel_spectrogram",
+      "description": "Load audio and compute normalized log-mel spectrogram per configured parameters.",
+      "parameters": [
+        {"name": "audio_path", "type": "String"},
+        {"name": "config", "type": "PreprocessingConfig"}
+      ],
+      "return_value": "np.ndarray (float32) shaped [n_mels, time_frames]",
+      "pseudocode_logic": [
+        "load waveform at config.sample_rate",
+        "normalize amplitude and trim silence using top_db",
+        "compute STFT with n_fft and hop_length",
+        "map to mel scale with n_mels",
+        "apply log(1+mel) scaling",
+        "z-score normalize per-frequency bin",
+        "return spectrogram tensor"
+      ]
+    },
+    {
+      "module": "ml/spec_augment.py",
+      "function_name": "apply_spec_augment",
+      "description": "Apply time and frequency masking to spectrogram for regularization.",
+      "parameters": [
+        {"name": "spec", "type": "np.ndarray"},
+        {"name": "time_masks", "type": "Integer"},
+        {"name": "freq_masks", "type": "Integer"}
+      ],
+      "return_value": "np.ndarray augmented spectrogram",
+      "pseudocode_logic": [
+        "for i in range(freq_masks): randomly mask contiguous mel bands",
+        "for j in range(time_masks): randomly mask contiguous time frames",
+        "return augmented spectrogram"
+      ]
+    },
+    {
+      "module": "ml/model.py",
+      "function_name": "build_cnn_classifier",
+      "description": "Construct a CNN model for genre classification on log-mel inputs.",
+      "parameters": [
+        {"name": "n_mels", "type": "Integer"},
+        {"name": "n_classes", "type": "Integer"}
+      ],
+      "return_value": "torch.nn.Module",
+      "pseudocode_logic": [
+        "define sequential conv blocks with BN+ReLU+Pool",
+        "apply temporal pooling to aggregate time dimension",
+        "add dense layers with dropout",
+        "final linear layer to n_classes",
+        "return model"
+      ]
+    },
+    {
+      "module": "ml/train.py",
+      "function_name": "train_model",
+      "description": "Execute a supervised training loop with AMP, checkpointing, and metric logging.",
+      "parameters": [
+        {"name": "model", "type": "torch.nn.Module"},
+        {"name": "dataloaders", "type": "Dict[str, DataLoader]"},
+        {"name": "config", "type": "Dict"}
+      ],
+      "return_value": "Dict with best_metrics and artifact paths",
+      "pseudocode_logic": [
+        "initialize optimizer, scheduler, class weights",
+        "scaler = GradScaler()",
+        "for each epoch:",
+        "- model.train(); iterate train loader with autocast:",
+        "- forward -> logits; compute CE loss",
+        "- scaler.scale(loss).backward()",
+        "- scaler.step(optimizer); scaler.update(); optimizer.zero_grad()",
+        "- validate: compute accuracy and macro_f1",
+        "if best metric improves: save checkpoint to models/",
+        "write metrics and confusion matrix files under runs/",
+        "handle exceptions by logging and marking run failed",
+        "return best metrics and artifact locations"
+      ]
+    },
+    {
+      "module": "ml/inference.py",
+      "function_name": "predict_topk",
+      "description": "Run forward pass and return top-k genres with probabilities.",
+      "parameters": [
+        {"name": "model", "type": "torch.nn.Module"},
+        {"name": "spec", "type": "np.ndarray"},
+        {"name": "label_map", "type": "List[str]"},
+        {"name": "top_k", "type": "Integer"}
+      ],
+      "return_value": "List[Dict{genre: str, probability: float}]",
+      "pseudocode_logic": [
+        "convert spec to tensor and add batch/time dims",
+        "model.eval(); with no_grad and autocast: forward to logits",
+        "apply softmax to get probabilities",
+        "select top_k indices and map to labels",
+        "return list of {genre, probability}"
+      ]
+    },
+    {
+      "module": "ml/evaluate.py",
+      "function_name": "compute_metrics",
+      "description": "Compute accuracy, macro-F1, and confusion matrix.",
+      "parameters": [
+        {"name": "y_true", "type": "List[int]"},
+        {"name": "y_pred", "type": "List[int]"},
+        {"name": "n_classes", "type": "Integer"}
+      ],
+      "return_value": "Dict with accuracy, macro_f1, confusion_matrix",
+      "pseudocode_logic": [
+        "build confusion matrix counts",
+        "compute per-class precision/recall/f1",
+        "average to macro_f1",
+        "compute overall accuracy",
+        "return metrics dict"
+      ]
+    },
+    {
+      "module": "core/locking.py",
+      "function_name": "with_promotion_lock",
+      "description": "Context manager implementing a file-based lock for model promotion/rollback.",
+      "parameters": [
+        {"name": "lock_path", "type": "String"},
+        {"name": "timeout_sec", "type": "Integer"}
+      ],
+      "return_value": "Context-managed lock acquisition",
+      "pseudocode_logic": [
+        "start timer",
+        "while time < timeout: try to create lock file exclusively",
+        "if success: yield; finally remove lock file",
+        "sleep small interval on failure",
+        "if timeout: raise TimeoutError"
+      ]
+    },
+    {
+      "module": "api/models.py",
+      "function_name": "promote_model_version",
+      "description": "Promote model_version_id to active using a file lock; write audit log.",
+      "parameters": [
+        {"name": "model_version_id", "type": "UUID"},
+        {"name": "reason", "type": "String|null"}
+      ],
+      "return_value": "JSON {model_version_id, status}",
+      "pseudocode_logic": [
+        "with with_promotion_lock(lock_path, 10):",
+        "validate model artifacts exist",
+  "update model_versions.csv: set all active->validated; set target->active",
+        "write AuditLog(action='promote', entity='ModelVersion', details)",
+        "return success JSON"
+      ]
+    },
+    {
+      "module": "services/jobs.py",
+      "function_name": "process_batch_job",
+      "description": "Worker routine to process a batch ZIP and write JSONL predictions.",
+      "parameters": [
+        {"name": "job_id", "type": "UUID"}
+      ],
+      "return_value": "None (updates DB and writes report)",
+      "pseudocode_logic": [
+        "mark job running; open ZIP; for each file:",
+        "try: preprocess -> spectrogram; predict -> top_k; append to JSONL",
+        "except Exception as e: record file-level error and continue",
+  "on completion: write a summary CSV/JSON and set output_report_path",
+        "on fatal error: mark job failed with error_message; write worker log"
+      ]
+    },
+    {
+      "module": "api/predict.py",
+      "function_name": "predict_endpoint",
+      "description": "HTTP handler for single-file prediction workflow.",
+      "parameters": [
+        {"name": "file", "type": "UploadFile"},
+        {"name": "top_k", "type": "Integer"}
+      ],
+      "return_value": "JSON response with prediction_id and predictions",
+      "pseudocode_logic": [
+        "validate content type and size",
+        "save file locally and create AudioSample",
+        "load active model and preprocessing config (cache with TTL)",
+        "preprocess -> spectrogram with guardrails for timeouts",
+        "predict -> top_k",
+  "append prediction to a pandas DataFrame and save to CSV/JSON",
+        "return JSON response"
+      ]
+    }
+  ],
+  "references": [
+    {"id": 1, "url": "https://www.sciencedirect.com/science/article/pii/S240584402400923X"},
+    {"id": 2, "url": "https://arxiv.org/html/2509.01762v1"},
+    {"id": 3, "url": "https://dl.acm.org/doi/10.1145/3722150.3722157"},
+    {"id": 4, "url": "https://www.nature.com/articles/s41598-025-90619-7"},
+    {"id": 5, "url": "http://www.ir.juit.ac.in:8080/jspui/bitstream/123456789/9989/1/Music%20Genre%20Classification%20using%20Deep%20Learning.pdf"},
+    {"id": 6, "url": "https://transactions.ismir.net/articles/10.5334/tismir.10"},
+    {"id": 7, "url": "https://www.computer.org/csdl/journal/oj/2024/01/10605044/1YHLuS00H8A"}
+  ]
+}
