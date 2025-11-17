@@ -50,18 +50,18 @@ This project implements a music genre classification system using deep learning 
 ## Training Configuration
 
 - Device: Auto-detect CUDA; prefer discrete RTX device if present; fallback to CPU.
-- Epochs: __________
-- Batch Size: __________
-- Learning Rate: __________
+- Epochs: 10
+- Batch Size: 32
+- Learning Rate: 0.01
 - Early Stopping-Like Behavior: Track best validation loss; save `models/best_model.pt` with metrics.
 - Checkpoint Contents: `{ epoch, model_state_dict, optimizer_state_dict, val_acc, val_loss }`.
 - Curves: Training/validation loss and accuracy plotted and saved during/after training.
 
 ## Results
 
-- Best Validation Accuracy: __________ %
-- Best Validation Loss: __________
-- Best Epoch: __________
+- Best Validation Accuracy: 72.71 %
+- Best Validation Loss: 0.9128
+- Best Epoch: 8
 - Confusion Matrix: [Insert figure]
 - Training Curves: [Insert loss/accuracy plots]
 - Observations: Summarize which genres are frequently confused; note class imbalance effects if any.
@@ -103,7 +103,7 @@ This project implements a music genre classification system using deep learning 
    - PyTorch with CUDA (if using GPU), `ffmpeg` installed system-wide.
    - Install Python deps (if needed):
      ```powershell
-     cd "C:\Users\amant\Documents\aaa-COLLEGE\aaa-semester 5\deep learning lab\PROJECT 1\redo aah"
+     cd <your filepath>
      pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121
      pip install librosa soundfile fastapi uvicorn customtkinter requests tqdm matplotlib scikit-learn
      ```
@@ -112,7 +112,7 @@ This project implements a music genre classification system using deep learning 
    - GUI opens; API runs at `http://127.0.0.1:8000`.
 3. Manual run (optional)
    ```powershell
-   cd "C:\Users\amant\Documents\aaa-COLLEGE\aaa-semester 5\deep learning lab\PROJECT 1\redo aah"
+   cd <your filepath>
    python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
    # In another terminal
    python .\run_gui.py
@@ -153,7 +153,7 @@ This project implements a music genre classification system using deep learning 
 - Uvicorn ASGI server.
 - Park et al., SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition.
 
-## Appendix A — Project Structure 
+## Appendix A — Project Structure
 
 ```
 application root/
@@ -174,7 +174,6 @@ application root/
 ├─ run_gui.py                 # GUI launcher
 └─ REPORT.md                  # this report
 ```
-
 
 ## Appendix B — API Quick Test
 

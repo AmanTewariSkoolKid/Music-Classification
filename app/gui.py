@@ -12,6 +12,9 @@ from datetime import datetime
 from typing import Optional
 import requests
 import sys
+from PIL import Image
+import subprocess
+import os
 
 # Ensure src/ is on sys.path for core modules
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +23,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
 from inference import load_predictor
-from config import MODELS_DIR, GENRE_LABELS
+from config import MODELS_DIR, GENRE_LABELS, LOGS_DIR
 
 # Material Design 3 Color Palette (Light Mode)
 COLORS_LIGHT = {
@@ -591,6 +594,9 @@ class GenreClassifierGUI:
             text_color=COLORS["text_secondary"]
         )
         self.initial_msg.pack(pady=50)
+
+        # Placeholder for metrics panel that will appear under results
+        self.metrics_panel: Optional[ctk.CTkFrame] = None
     
     def _create_footer(self):
         """Create footer with info"""
@@ -639,23 +645,19 @@ class GenreClassifierGUI:
         )
         self.status_frame.configure(fg_color=COLORS["success"])
 
-        # Update model metrics if available
-        try:
-            metrics = self._read_model_metrics()
-            if metrics:
-                val_acc, val_loss, epoch = metrics
-                info = f"Model: best_model.pt | Val Acc: {val_acc:.2f}% | Val Loss: {val_loss:.4f} | Epoch: {epoch+1}"
-            else:
-                info = "Model: best_model.pt | Metrics: n/a"
-        except Exception:
-            info = "Model: best_model.pt | Metrics: n/a"
-
+        # Sidebar label: keep concise to avoid overflow
         if hasattr(self, "model_info_label"):
-            self.model_info_label.configure(text=info)
+            self.model_info_label.configure(text="Model: best_model.pt")
         
         # Only enable predict button if file is also selected
         if self.current_file:
             self.predict_btn.configure(state="normal")
+
+        # Render metrics/confusion matrix panel immediately on load
+        try:
+            self._render_metrics_panel()
+        except Exception:
+            pass
     
     def _on_model_not_found(self):
         """Called when model file is not found"""
@@ -700,6 +702,55 @@ class GenreClassifierGUI:
             except Exception:
                 pass
             return val_acc, val_loss, epoch
+        return None
+
+    def _read_extended_metrics(self):
+        """Read additional metrics (precision/recall/F1) from logs if available.
+
+        Expects a JSON file at LOGS_DIR / 'metrics.json' with keys like
+        'precision_macro', 'recall_macro', 'f1_macro'. Returns a dict.
+        """
+        metrics_path = Path(LOGS_DIR) / "metrics.json"
+        data = {}
+        try:
+            if metrics_path.exists():
+                with open(metrics_path, "r") as f:
+                    raw = json.load(f)
+                # Normalize keys
+                for k in ["precision_macro", "recall_macro", "f1_macro", "accuracy"]:
+                    if k in raw and raw[k] is not None:
+                        try:
+                            data[k] = float(raw[k])
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return data
+
+    def _load_confusion_matrix_image(self):
+        """Try to load a confusion matrix image from logs directory.
+
+        Looks for PNG/JPG. Returns a CTkImage or None.
+        """
+        candidates = [
+            Path(LOGS_DIR) / "confusion_matrix.png",
+            Path(LOGS_DIR) / "confusion-matrix.png",
+            Path(LOGS_DIR) / "confusion_matrix.jpg",
+            Path(LOGS_DIR) / "confusion-matrix.jpg",
+        ]
+        for p in candidates:
+            if p.exists():
+                try:
+                    img = Image.open(p)
+                    # Resize to fit card width nicely (~760px inside scroll area)
+                    max_w = 760
+                    w, h = img.size
+                    if w > max_w:
+                        ratio = max_w / float(w)
+                        img = img.resize((int(w * ratio), int(h * ratio)))
+                    return ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+                except Exception:
+                    return None
         return None
     
     def _browse_file(self):
@@ -782,6 +833,9 @@ class GenreClassifierGUI:
             text_color=COLORS["text_secondary"]
         )
         timestamp.pack(pady=(20, 10))
+
+        # Render model metrics panel under predictions
+        self._render_metrics_panel()
     
     def _create_prediction_card(self, rank, prediction):
         """Create a card for individual prediction with genre icon"""
@@ -922,6 +976,130 @@ class GenreClassifierGUI:
                 messagebox.showinfo("Success", f"Results saved to:\n{filename}")
             except Exception as e:
                 messagebox.showerror("Save Error", f"Failed to save results:\n{str(e)}")
+
+    def _metric_chip(self, parent, label, value, suffix=""):
+        """Small helper to render a metric chip label-value."""
+        frame = ctk.CTkFrame(parent, fg_color=COLORS["surface_variant"], corner_radius=8)
+        frame.pack(side="left", padx=5, pady=5)
+        ctk.CTkLabel(frame, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_primary"]).pack(padx=8, pady=(6, 0))
+        ctk.CTkLabel(frame, text=f"{value}{suffix}", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(padx=8, pady=(0, 6))
+        return frame
+
+    def _render_metrics_panel(self):
+        """Render a panel under results showing model metrics and confusion matrix if available."""
+        # Destroy previous panel if exists
+        if self.metrics_panel is not None and self.metrics_panel.winfo_exists():
+            self.metrics_panel.destroy()
+
+        # Create card container
+        card = ctk.CTkFrame(self.results_scroll, fg_color=COLORS["surface"], corner_radius=12)
+        card.pack(fill="x", padx=10, pady=(10, 20))
+        self.metrics_panel = card
+
+        # Header
+        header = ctk.CTkLabel(card, text="📈 Model Metrics", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["text_primary"])
+        header.pack(anchor="w", padx=15, pady=(12, 6))
+
+        # Chips row
+        chips_row = ctk.CTkFrame(card, fg_color="transparent")
+        chips_row.pack(fill="x", padx=10, pady=5)
+
+        # Core metrics from checkpoint
+        core = self._read_model_metrics()
+        if core:
+            val_acc, val_loss, epoch = core
+            self._metric_chip(chips_row, "Val Acc", f"{val_acc:.2f}", suffix=" %")
+            self._metric_chip(chips_row, "Val Loss", f"{val_loss:.4f}")
+            self._metric_chip(chips_row, "Best Epoch", f"{epoch+1}")
+        else:
+            ctk.CTkLabel(chips_row, text="No validation metrics found.", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(anchor="w", padx=4, pady=6)
+
+        # Extended metrics if available
+        ext = self._read_extended_metrics()
+        if ext:
+            ext_row = ctk.CTkFrame(card, fg_color="transparent")
+            ext_row.pack(fill="x", padx=10, pady=(0, 10))
+            if "f1_macro" in ext:
+                self._metric_chip(ext_row, "F1 (macro)", f"{ext['f1_macro']:.3f}")
+            if "precision_macro" in ext:
+                self._metric_chip(ext_row, "Precision (macro)", f"{ext['precision_macro']:.3f}")
+            if "recall_macro" in ext:
+                self._metric_chip(ext_row, "Recall (macro)", f"{ext['recall_macro']:.3f}")
+
+        # Confusion matrix image
+        img = self._load_confusion_matrix_image()
+        if img is not None:
+            img_label = ctk.CTkLabel(card, image=img, text="")
+            img_label.image = img  # keep reference
+            img_label.pack(padx=10, pady=(10, 12))
+        else:
+            ctk.CTkLabel(card, text="Confusion matrix not found in logs/.", font=ctk.CTkFont(size=12), text_color=COLORS["text_secondary"]).pack(anchor="w", padx=15, pady=(6, 12))
+
+        # Actions row (Generate / Refresh)
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(fill="x", padx=10, pady=(0, 12))
+        self.refresh_btn = ctk.CTkButton(
+            actions,
+            text="🔄 Generate / Refresh",
+            command=self._on_generate_refresh_clicked,
+            height=36,
+            fg_color=COLORS["secondary"],
+            hover_color=COLORS["primary"],
+            corner_radius=8,
+            width=180,
+        )
+        self.refresh_btn.pack(side="left")
+        # Optional: open logs folder button
+        self.open_logs_btn = ctk.CTkButton(
+            actions,
+            text="📂 Open Logs Folder",
+            command=self._open_logs_folder,
+            height=36,
+            fg_color=COLORS["surface_variant"],
+            hover_color=COLORS["primary"],
+            corner_radius=8,
+            width=180,
+        )
+        self.open_logs_btn.pack(side="left", padx=8)
+
+    def _open_logs_folder(self):
+        try:
+            path = str(LOGS_DIR)
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+        except Exception:
+            pass
+
+    def _on_generate_refresh_clicked(self):
+        # Run evaluate.py in a background thread to avoid freezing UI
+        def task():
+            try:
+                self.root.after(0, lambda: self._set_refresh_state(True))
+                # Use the same Python interpreter running the GUI
+                py = sys.executable
+                root = PROJECT_ROOT
+                eval_path = root / "src" / "evaluate.py"
+                cmd = [py, str(eval_path), "--limit", "300"]
+                subprocess.run(cmd, cwd=str(root), check=False)
+            finally:
+                # Re-render panel (loads new metrics + image)
+                self.root.after(0, lambda: self._set_refresh_state(False))
+                self.root.after(0, self._render_metrics_panel)
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _set_refresh_state(self, busy: bool):
+        try:
+            if busy:
+                if hasattr(self, "refresh_btn"):
+                    self.refresh_btn.configure(state="disabled", text="⏳ Generating…")
+            else:
+                if hasattr(self, "refresh_btn"):
+                    self.refresh_btn.configure(state="normal", text="🔄 Generate / Refresh")
+        except Exception:
+            pass
     
     def run(self):
         """Start the GUI application"""
