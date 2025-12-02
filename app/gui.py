@@ -1080,7 +1080,15 @@ class GenreClassifierGUI:
                 # Use the same Python interpreter running the GUI
                 py = sys.executable
                 root = PROJECT_ROOT
-                eval_path = root / "src" / "evaluate.py"
+                # Prefer root-level evaluate.py; fall back to src/evaluate.py
+                candidates = [
+                    root / "evaluate.py",
+                    root / "src" / "evaluate.py",
+                ]
+                eval_path = next((p for p in candidates if p.exists()), None)
+                if not eval_path:
+                    # If neither exists, do nothing gracefully
+                    return
                 cmd = [py, str(eval_path), "--limit", "300"]
                 subprocess.run(cmd, cwd=str(root), check=False)
             finally:
