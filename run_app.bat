@@ -32,12 +32,12 @@ if errorlevel 1 (
 
 echo.
 echo ========================================
-echo   Starting API Server
+echo   Starting API Server (unified src/api.py)
 echo ========================================
 echo.
 
 REM Start API server in background
-start "Music Genre API" cmd /c "python -m uvicorn app.api:app --host 127.0.0.1 --port 8000"
+start "Music Genre API" cmd /c "python -m uvicorn src.api:app --host 127.0.0.1 --port 8000"
 timeout /t 3 /nobreak >nul
 
 echo [INFO] API server started on http://127.0.0.1:8000
@@ -67,7 +67,7 @@ taskkill /F /FI "WINDOWTITLE eq Music Genre API*" >nul 2>&1
 
 REM Kill any remaining related processes
 taskkill /F /FI "WINDOWTITLE eq Music Genre Classifier*" >nul 2>&1
-wmic process where "commandline like '%%uvicorn%%app.api:app%%' and name='python.exe'" delete >nul 2>&1
+wmic process where "commandline like '%%uvicorn%%src.api:app%%' and name='python.exe'" delete >nul 2>&1
 
 echo.
 echo [INFO] Application closed successfully
