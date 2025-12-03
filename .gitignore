@@ -13,7 +13,6 @@ sample test songs/
 data/
 models/*.pt
 cache/
-logs/
 
 # Jupyter
 .ipynb_checkpoints/
