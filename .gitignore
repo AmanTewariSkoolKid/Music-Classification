@@ -8,7 +8,7 @@ env/
 venv/
 ENV/
 .venv/
-
+sample test songs/  
 # Data and models
 data/
 models/*.pt
