@@ -653,7 +653,12 @@ class GenreClassifierGUI:
         if self.current_file:
             self.predict_btn.configure(state="normal")
 
-        # Render metrics/confusion matrix panel immediately on load
+        # Try to auto-generate confusion matrix once on first load if missing
+        try:
+            self._auto_generate_confusion_if_missing()
+        except Exception:
+            pass
+        # Render metrics/confusion matrix panel immediately after generation attempt
         try:
             self._render_metrics_panel()
         except Exception:
@@ -752,6 +757,29 @@ class GenreClassifierGUI:
                 except Exception:
                     return None
         return None
+
+    def _auto_generate_confusion_if_missing(self):
+        """If confusion matrix is not present in logs/, run evaluator to generate it.
+
+        This runs once during initial load to improve UX: users see the matrix
+        without needing to click Generate/Refresh. It is a best-effort attempt
+        and will quietly skip on failure.
+        """
+        img = self._load_confusion_matrix_image()
+        if img is not None:
+            return  # already present
+        # Run evaluate.py synchronously with a small subset to keep it fast
+        try:
+            py = sys.executable
+            root = PROJECT_ROOT
+            candidates = [root / "evaluate.py", root / "src" / "evaluate.py"]
+            eval_path = next((p for p in candidates if p.exists()), None)
+            if not eval_path:
+                return
+            cmd = [py, str(eval_path), "--limit", "200"]
+            subprocess.run(cmd, cwd=str(root), check=False)
+        except Exception:
+            pass
     
     def _browse_file(self):
         """Open file browser to select audio file"""
@@ -1088,6 +1116,7 @@ class GenreClassifierGUI:
                 eval_path = next((p for p in candidates if p.exists()), None)
                 if not eval_path:
                     # If neither exists, do nothing gracefully
+                    self.root.after(0, lambda: messagebox.showwarning("Evaluator Missing", "evaluate.py not found in project. Please ensure it exists."))
                     return
                 cmd = [py, str(eval_path), "--limit", "300"]
                 subprocess.run(cmd, cwd=str(root), check=False)

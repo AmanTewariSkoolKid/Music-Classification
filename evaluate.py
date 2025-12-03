@@ -22,12 +22,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Local imports
-from config import GENRE_LABELS, LOGS_DIR
+from config import GENRE_LABELS, LOGS_DIR, DATA_DIR
 from inference import load_predictor
 
-# Paths: dataset is stored in the repository root under data/
-ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = ROOT / "data"
+# Paths: use config.DATA_DIR to be robust regardless of cwd
+DATA_ROOT = Path(DATA_DIR)
 AUDIO_DIR = DATA_ROOT / "fma_medium"
 TRACKS_CSV = DATA_ROOT / "fma_metadata" / "tracks.csv"
 

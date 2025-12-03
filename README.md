@@ -1,6 +1,10 @@
+
 # Music Genre Classification with Deep Learning
 
 A simplified, working implementation for music genre classification using the FMA (Free Music Archive) dataset with a beautiful Material Design GUI.
+
+**REQUIRED: FMA_MEDIUM DATA SET. only tested in FMA_MEDIUM DATASET
+[get dataset here.](https://github.com/mdeff/fma "tested only with FMA_medium")**
 
 ## Features
 
@@ -43,6 +47,7 @@ pip install -r requirements.txt
 Download the FMA-medium dataset from: https://github.com/mdeff/fma
 
 Extract to the `data/` directory:
+
 ```
 data/
 └── fma_medium/
@@ -54,10 +59,12 @@ data/
 ### 3. Prepare Dataset
 
 Create CSV files with your train/validation splits:
+
 - `train_files.csv`: Columns = ['path', 'label_idx']
 - `val_files.csv`: Columns = ['path', 'label_idx']
 
 Genre indices (0-15):
+
 ```
 0: Electronic      8: Classical
 1: Experimental    9: Country
@@ -74,16 +81,19 @@ Genre indices (0-15):
 ### Running the GUI Application
 
 **Simply run:**
+
 ```bash
 python run_gui.py
 ```
 
 Or directly:
+
 ```bash
 python gui.py
 ```
 
 The GUI features:
+
 - 🎨 Beautiful Material Design interface with custom color scheme
 - 📁 Easy file browser for audio selection
 - 🎯 Adjustable top-k predictions (1-10)
